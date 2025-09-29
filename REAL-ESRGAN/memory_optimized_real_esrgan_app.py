@@ -81,8 +81,16 @@ import io
 from rrdb_arch import RRDBNet
 import threading
 import time
+import mimetypes
 
 app = Flask(__name__)
+
+# Initialize mimetypes
+mimetypes.init()
+
+# Environment configuration
+UPSCALER_PORT = int(os.environ.get('UPSCALER_PORT', '8083'))
+UPSCALER_HOST = os.environ.get('UPSCALER_HOST', '0.0.0.0')
 
 # Memory monitoring
 def get_memory_usage():
@@ -443,6 +451,26 @@ def health_check():
         }
     })
 
+@app.route('/config')
+def get_config():
+    """Service discovery endpoint for Suwayomi auto-detection"""
+    return jsonify({
+        'service': 'real-esrgan-upscaler',
+        'version': '1.0.0',
+        'upscale_factor': config_scale_factor,  # Configurable via web UI
+        'supported_formats': {
+            'jpeg': mimetypes.types_map.get('.jpeg', 'image/jpeg'),
+            'jpg': mimetypes.types_map.get('.jpg', 'image/jpeg'),
+            'png': mimetypes.types_map.get('.png', 'image/png'),
+            'webp': mimetypes.types_map.get('.webp', 'image/webp')
+        },
+        'default_output_format': 'jpeg',
+        'default_quality': 95,
+        'gpu_available': torch.cuda.is_available(),
+        'max_input_pixels': 2048 * 2048,
+        'tile_size': config_tile_size
+    })
+
 @app.route('/upscale', methods=['POST'])
 def upscale_image():
     start_time = time.time()
@@ -454,6 +482,19 @@ def upscale_image():
             force_memory_cleanup()
             if get_memory_usage() > 8000:
                 return jsonify({'error': 'Memory usage too high, please try again later'}), 503
+
+        # Get optional output format and quality parameters
+        output_format = request.form.get('format', 'jpeg').lower()
+        quality = int(request.form.get('quality', 95))
+
+        # Validate format
+        valid_formats = {'jpeg', 'jpg', 'png', 'webp'}
+        if output_format not in valid_formats:
+            return jsonify({'error': f'Unsupported format. Supported: {", ".join(valid_formats)}'}), 400
+
+        # Validate quality
+        if not (60 <= quality <= 100):
+            return jsonify({'error': 'Quality must be between 60-100'}), 400
 
         # Get image from request
         if 'image' not in request.files:
@@ -493,9 +534,20 @@ def upscale_image():
         if device.type == 'cuda':
             torch.cuda.empty_cache()
 
-        # Save to buffer
+        # Save to buffer with requested format
         buffer = io.BytesIO()
-        output_image.save(buffer, format='JPEG', quality=95, optimize=True)
+
+        # Use mimetypes to get proper MIME type
+        if output_format in ['jpeg', 'jpg']:
+            output_image.save(buffer, format='JPEG', quality=quality, optimize=True)
+            mime_type = mimetypes.types_map.get('.jpeg', 'image/jpeg')
+        elif output_format == 'png':
+            output_image.save(buffer, format='PNG', optimize=True)
+            mime_type = mimetypes.types_map.get('.png', 'image/png')
+        elif output_format == 'webp':
+            output_image.save(buffer, format='WEBP', quality=quality, optimize=True)
+            mime_type = mimetypes.types_map.get('.webp', 'image/webp')
+
         buffer.seek(0)
 
         processing_time = int((time.time() - start_time) * 1000)
@@ -503,12 +555,15 @@ def upscale_image():
 
         print(f"[INFO] Processing completed in {processing_time}ms")
         print(f"[INFO] Memory: {initial_memory:.1f}MB -> {final_memory:.1f}MB")
+        print(f"[INFO] Output format: {output_format} (quality: {quality})")
 
         # Force cleanup after processing
         force_memory_cleanup()
 
-        response = send_file(buffer, mimetype='image/jpeg')
+        response = send_file(buffer, mimetype=mime_type)
         response.headers['X-Processing-Time'] = str(processing_time)
+        response.headers['X-Output-Format'] = output_format
+        response.headers['X-Upscale-Factor'] = str(config_scale_factor)
         return response
 
     except Exception as e:
@@ -536,7 +591,9 @@ if __name__ == '__main__':
         exit(1)
 
     print(f"[READY] Service ready. Memory usage: {get_memory_usage():.1f} MB")
-    print("[INFO] Port: 8083")
-    print("[INFO] Health check: http://localhost:8083/health")
+    print(f"[INFO] Host: {UPSCALER_HOST}")
+    print(f"[INFO] Port: {UPSCALER_PORT}")
+    print(f"[INFO] Health check: http://localhost:{UPSCALER_PORT}/health")
+    print(f"[INFO] Config: http://localhost:{UPSCALER_PORT}/config")
 
-    app.run(host='0.0.0.0', port=8083, debug=True, threaded=True)
+    app.run(host=UPSCALER_HOST, port=UPSCALER_PORT, debug=False, threaded=True)
