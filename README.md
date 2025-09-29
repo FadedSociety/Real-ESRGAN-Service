@@ -89,12 +89,99 @@ If the automatic setup doesn't work:
 
 ## 🔗 Integration with Suwayomi
 
-This service integrates automatically with Suwayomi Server:
+### Step 1: Start the Upscaler Service
 
-1. **Auto-Detection**: Suwayomi automatically finds the service when both are running
-2. **Seamless Processing**: Images are upscaled transparently during manga reading
-3. **Fallback**: Normal manga reading continues if service is offline
-4. **Configurable**: Advanced users can override settings via Suwayomi's GraphQL interface
+```bash
+cd Real-ESRGAN-master/REAL-ESRGAN
+python memory_optimized_real_esrgan_app.py
+```
+
+The service will start on `http://localhost:8083` by default.
+
+### Step 2: Configure Suwayomi Server
+
+Edit your Suwayomi configuration file:
+- **Windows**: `C:\Users\YourUsername\AppData\Local\Tachidesk\server.conf`
+- **Linux/Mac**: `~/.local/share/Tachidesk/server.conf`
+
+Add the following configuration:
+
+**Option A - Enable for all image types (recommended):**
+```conf
+server.downloadConversions {
+    "default" {
+        target = "http://localhost:8083/upscale"
+    }
+}
+```
+
+**Option B - Enable for specific image types:**
+```conf
+server.downloadConversions {
+    "image/jpeg" {
+        target = "http://localhost:8083/upscale"
+    }
+    "image/png" {
+        target = "http://localhost:8083/upscale"
+    }
+    "image/webp" {
+        target = "http://localhost:8083/upscale"
+    }
+}
+```
+
+### Step 3: Optional - Combine Upscaling with Format Conversion
+
+You can upscale images AND convert them to a different format for compression:
+
+```conf
+server.downloadConversions {
+    "default" {
+        target = "http://localhost:8083/upscale"
+    }
+    "image/jpeg" {
+        target = "image/webp"
+        compressionLevel = 0.8
+    }
+}
+```
+
+This will:
+1. First upscale all images to 4x resolution
+2. Then convert JPEG images to WebP format with 80% quality
+
+### Changing the Port
+
+If port 8083 is already in use, you can change it:
+
+**1. Set environment variable before starting the Python service:**
+```bash
+# Windows (Command Prompt)
+set UPSCALER_PORT=9999
+set UPSCALER_HOST=0.0.0.0
+python memory_optimized_real_esrgan_app.py
+
+# Linux/Mac
+export UPSCALER_PORT=9999
+export UPSCALER_HOST=0.0.0.0
+python memory_optimized_real_esrgan_app.py
+```
+
+**2. Update Suwayomi's server.conf to match:**
+```conf
+server.downloadConversions {
+    "default" {
+        target = "http://localhost:9999/upscale"  # Change to your port
+    }
+}
+```
+
+### How It Works
+
+1. **Seamless Processing**: Images are upscaled transparently during manga downloads
+2. **Complementary**: Upscaling works together with format conversion
+3. **Fallback**: Normal manga downloads continue if service is offline
+4. **No Auto-Detection**: You must manually configure the URL (explicit configuration following Suwayomi's FlareSolverr pattern)
 
 ## 🐛 Troubleshooting
 
@@ -112,10 +199,12 @@ This service integrates automatically with Suwayomi Server:
 - Close other GPU-intensive applications
 - Consider using CPU mode instead
 
-### Suwayomi not detecting service
-- Make sure both services are running
-- Check that the service is accessible at `localhost:8083/health`
-- Wait up to 1 minute for auto-detection to refresh
+### Suwayomi not using upscaler
+- Make sure the upscaler service is running (`python memory_optimized_real_esrgan_app.py`)
+- Check that the service is accessible at `http://localhost:8083/health` in your browser
+- Verify your `server.conf` has the correct `downloadConversions` configuration
+- Restart Suwayomi Server after changing `server.conf`
+- Check Suwayomi logs for connection errors
 
 ## 📊 Performance
 
